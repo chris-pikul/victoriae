@@ -1,0 +1,14 @@
+syntax = "proto3";
+package victoriae.v1;
+
+message GameState {
+  uint32 turn_number = 1;
+  repeated Unit units = 2;
+}
+
+message Unit {
+  string id = 1;
+  uint32 x = 2;
+  uint32 y = 3;
+  string type = 4;
+}

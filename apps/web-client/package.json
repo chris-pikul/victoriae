@@ -1,0 +1,19 @@
+{
+    "name": "@victoriae/web-client",
+    "private": true,
+    "version": "0.1.0",
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "tsc && vite build",
+        "preview": "vite preview"
+    },
+    "dependencies": {
+        "typegpu": "latest"
+    },
+    "devDependencies": {
+        "typescript": "latest",
+        "vite": "latest",
+        "unplugin-typegpu": "latest"
+    }
+}

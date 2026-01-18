@@ -1,0 +1,21 @@
+version: '3'
+
+tasks:
+  dev:
+    desc: Start all development servers
+    deps: [dev:client, dev:server]
+
+  dev:client:
+    dir: apps/web-client
+    cmds:
+      - pnpm vite
+
+  dev:server:
+    dir: apps/server
+    cmds:
+      - go run ./cmd/main.go
+
+  proto:gen:
+    desc: Generate TS and Go code from Protobuf
+    cmds:
+      - buf generate # Assumes you are using Buf for Protobuf
