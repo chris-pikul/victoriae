@@ -14,6 +14,7 @@ export class WorldLayer implements VictoriaeLayer {
 
     private device: GPUDevice | null = null;
     private cameraUniformBuffer: GPUBuffer | null = null;
+    private hoveredTileUniformBuffer: GPUBuffer | null = null;
     private mapManager: MapManager;
     private tilesetTexture: GPUTexture | null = null;
     private tilesetTextureView: GPUTextureView | null = null;
@@ -72,6 +73,13 @@ export class WorldLayer implements VictoriaeLayer {
                         type: 'filtering',
                     },
                 },
+                {
+                    binding: 4, // Hovered tile uniform
+                    visibility: GPUShaderStage.FRAGMENT,
+                    buffer: {
+                        type: 'uniform',
+                    },
+                },
             ],
         });
 
@@ -82,6 +90,22 @@ export class WorldLayer implements VictoriaeLayer {
             size: uniformBufferSize,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
+
+        // Create uniform buffer for hovered tile (vec2<u32> = 8 bytes, but need 16 for alignment)
+        const hoveredTileBufferSize = 16; // Aligned to 16 bytes
+        this.hoveredTileUniformBuffer = this.device.createBuffer({
+            label: 'hovered-tile-uniform-buffer',
+            size: hoveredTileBufferSize,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+
+        // Initialize with -1 (no tile hovered)
+        const initialHoveredTileData = new Uint32Array(4);
+        initialHoveredTileData[0] = 0xFFFFFFFF; // -1 as u32
+        initialHoveredTileData[1] = 0xFFFFFFFF; // -1 as u32
+        initialHoveredTileData[2] = 0; // padding
+        initialHoveredTileData[3] = 0; // padding
+        this.device.queue.writeBuffer(this.hoveredTileUniformBuffer, 0, initialHoveredTileData);
 
         // Note: Tilemap storage buffer is managed by MapManager
         // We don't generate any data here - we're a passive listener
@@ -160,10 +184,16 @@ export class WorldLayer implements VictoriaeLayer {
                     screenSize: vec2<f32>,
                 };
                 
+                struct HoveredTileUniform {
+                    tile: vec2<u32>,
+                    padding: vec2<u32>, // Padding for 16-byte alignment
+                };
+                
                 @group(0) @binding(0) var<uniform> camera: CameraUniform;
                 @group(0) @binding(1) var<storage, read> tilemap: array<u32>;
                 @group(0) @binding(2) var tileset: texture_2d<f32>;
                 @group(0) @binding(3) var tilesetSampler: sampler;
+                @group(0) @binding(4) var<uniform> hoveredTile: HoveredTileUniform;
                 
                 const MAP_SIZE: u32 = 64u;
                 const TILESET_COLS: u32 = 4u;
@@ -214,10 +244,30 @@ export class WorldLayer implements VictoriaeLayer {
                     let tilesetU = (f32(tileId) + tileUV.x) / f32(TILESET_COLS);
                     let tilesetV = tileUV.y;
                     
-                    let color = textureSample(tileset, tilesetSampler, vec2<f32>(tilesetU, tilesetV));
+                    var color = textureSample(tileset, tilesetSampler, vec2<f32>(tilesetU, tilesetV));
                     
                     if (isOutOfBounds) {
                         return color * 0.3;
+                    }
+                    
+                    // Check if this tile is hovered (highlight it)
+                    // Only highlight if hoveredTile is valid (not -1)
+                    let isValidHover = hoveredTile.tile.x != 0xFFFFFFFFu && hoveredTile.tile.y != 0xFFFFFFFFu;
+                    let isHovered = isValidHover && 
+                                    u32(clampedX) == hoveredTile.tile.x && 
+                                    u32(clampedY) == hoveredTile.tile.y;
+                    
+                    if (isHovered) {
+                        // Highlight: brighten and add a slight blue tint
+                        color = color * vec4<f32>(1.2, 1.2, 1.4, 1.0);
+                        
+                        // Draw a border on the edges of the tile
+                        let borderWidth = 0.1;
+                        let isBorder = tileUV.x < borderWidth || tileUV.x > (1.0 - borderWidth) ||
+                                      tileUV.y < borderWidth || tileUV.y > (1.0 - borderWidth);
+                        if (isBorder) {
+                            color = vec4<f32>(0.3, 0.5, 1.0, 1.0); // Blue border
+                        }
                     }
                     
                     return color;
@@ -275,7 +325,23 @@ export class WorldLayer implements VictoriaeLayer {
         uniformData[6] = 0.0;
         uniformData[7] = 0.0;
 
-        this.device.queue.writeBuffer(this.cameraUniformBuffer, 0, uniformData.buffer);
+        this.device.queue.writeBuffer(this.cameraUniformBuffer, 0, uniformData);
+
+        // Read hovered tile coordinates from SAB and update uniform buffer
+        if (this.hoveredTileUniformBuffer) {
+            const hoveredTileX = sabView[SAB_OFFSETS.HOVERED_TILE_X] || -1;
+            const hoveredTileY = sabView[SAB_OFFSETS.HOVERED_TILE_Y] || -1;
+
+            // Store as Uint32Array for u32 in shader (but need to write as bytes)
+            // WGSL expects vec2<u32> which is 8 bytes, but we need 16 for alignment
+            const hoveredTileData = new Uint32Array(4); // 16 bytes total
+            hoveredTileData[0] = Math.max(0, Math.floor(hoveredTileX)); // tile.x
+            hoveredTileData[1] = Math.max(0, Math.floor(hoveredTileY)); // tile.y
+            hoveredTileData[2] = 0; // padding
+            hoveredTileData[3] = 0; // padding
+
+            this.device.queue.writeBuffer(this.hoveredTileUniformBuffer, 0, hoveredTileData);
+        }
 
         // Update bind group if map data is now available
         this.ensureBindGroup();
@@ -318,6 +384,12 @@ export class WorldLayer implements VictoriaeLayer {
                 {
                     binding: 3,
                     resource: this.tilesetSampler!,
+                },
+                {
+                    binding: 4,
+                    resource: {
+                        buffer: this.hoveredTileUniformBuffer!,
+                    },
                 },
             ],
         });

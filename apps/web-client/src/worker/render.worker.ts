@@ -3,8 +3,11 @@ import { ViewManager } from './viewManager';
 import { WorldLayer } from './views/worldLayer';
 import { TestOverlayLayer } from './views/testOverlayLayer';
 import { MinimapView } from './views/MinimapView';
+import { UnitLayer } from './views/UnitLayer';
 import { MapManager } from './managers/MapManager';
+import { EntityManager } from './managers/EntityManager';
 import type { TgpuContext } from './types';
+import { SAB_OFFSETS } from '../shared/constants';
 
 let canvas: OffscreenCanvas;
 let sabView: Float32Array;
@@ -14,6 +17,7 @@ let context: GPUCanvasContext;
 let format: GPUTextureFormat;
 let viewManager: ViewManager;
 let mapManager: MapManager;
+let entityManager: EntityManager;
 let gpuContext: TgpuContext | null = null;
 
 self.onmessage = async (e: MessageEvent) => {
@@ -89,6 +93,42 @@ self.onmessage = async (e: MessageEvent) => {
             // Store data temporarily if MapManager isn't ready
             // This shouldn't happen in normal flow, but handle gracefully
         }
+    } else if (type === 'UPDATE_UNITS') {
+        // Receive unit data from main thread (zero-copy transfer)
+        const { unitData, unitCount } = e.data;
+
+        console.log('Victoriae [Worker Thread]: Received UPDATE_UNITS message', {
+            unitData: unitData ? `Float32Array (${unitData.length} elements)` : 'MISSING',
+            unitCount: unitCount
+        });
+
+        if (!unitData || !(unitData instanceof Float32Array)) {
+            console.error('Victoriae [Worker Thread]: ERROR - Invalid unit data received');
+            return;
+        }
+
+        // Validate data size
+        // Format: [x, y, typeId, state] per unit = 4 floats per unit
+        const expectedSize = unitCount * 4;
+        if (unitData.length !== expectedSize) {
+            console.error('Victoriae [Worker Thread]: ERROR - Unit data size mismatch', {
+                received: unitData.length,
+                expected: expectedSize,
+                unitCount
+            });
+            return;
+        }
+
+        // Update EntityManager with new data
+        if (entityManager) {
+            entityManager.updateUnitData(unitData, unitCount);
+            console.log('Victoriae [Worker Thread]: EntityManager updated with new unit data', {
+                unitCount,
+                dataSize: unitData.length
+            });
+        } else {
+            console.warn('Victoriae [Worker Thread]: EntityManager not initialized yet, storing data for later');
+        }
     }
 };
 
@@ -124,6 +164,10 @@ async function startRendering() {
     mapManager = new MapManager();
     mapManager.init(device);
 
+    // Initialize EntityManager (passive listener for unit data)
+    entityManager = new EntityManager();
+    entityManager.init(device);
+
     // Create GPU context for layers
     gpuContext = {
         root,
@@ -140,8 +184,12 @@ async function startRendering() {
     // Add the base WorldLayer (renders the tilemap) - uses MapManager
     viewManager.add(new WorldLayer(mapManager));
 
+    // Add the UnitLayer (renders units using GPU instancing) - uses EntityManager and MapManager
+    // Added after WorldLayer so units render on top of the map
+    viewManager.add(new UnitLayer(entityManager, mapManager));
+
     // Add the MinimapView (renders simplified overview in top-right corner) - uses MapManager
-    // Added at higher index so it renders as an overlay above WorldLayer
+    // Added at highest index so it renders as an overlay above everything
     viewManager.add(new MinimapView(mapManager));
 
     // Add the test overlay layer (demonstrates layered composition)
@@ -150,12 +198,64 @@ async function startRendering() {
     console.log('Victoriae [Worker Thread]: ViewManager initialized, starting render loop...');
 
     // Start render loop
+    /**
+     * Calculate world tile coordinates from mouse screen position
+     * Uses the same transformation as the WorldLayer shader
+     */
+    function calculateHoveredTile(): void {
+        const mouseScreenX = sabView[SAB_OFFSETS.MOUSE_WORLD_X]; // Screen pixel X
+        const mouseScreenY = sabView[SAB_OFFSETS.MOUSE_WORLD_Y]; // Screen pixel Y
+        const camX = sabView[SAB_OFFSETS.CAMERA_X];
+        const camY = sabView[SAB_OFFSETS.CAMERA_Y];
+        const zoom = sabView[SAB_OFFSETS.CAMERA_ZOOM];
+        const screenWidth = sabView[SAB_OFFSETS.SCREEN_WIDTH];
+        const screenHeight = sabView[SAB_OFFSETS.SCREEN_HEIGHT];
+
+        // Skip calculation if screen dimensions are invalid
+        if (screenWidth <= 0 || screenHeight <= 0) {
+            sabView[SAB_OFFSETS.HOVERED_TILE_X] = -1;
+            sabView[SAB_OFFSETS.HOVERED_TILE_Y] = -1;
+            return;
+        }
+
+        // Convert screen pixel to NDC (-1 to 1) - matches shader exactly
+        const ndcRawX = (mouseScreenX / screenWidth) * 2.0 - 1.0;
+        const ndcRawY = (mouseScreenY / screenHeight) * 2.0 - 1.0;
+        // Flip Y axis (matches shader: ndc.y = -ndcRaw.y)
+        const ndcX = ndcRawX;
+        const ndcY = -ndcRawY;
+
+        // Calculate world position - matches shader exactly
+        const aspectRatio = screenWidth / screenHeight;
+        const worldSizeY = 2.0 / Math.max(zoom, 0.001);
+        const worldSizeX = worldSizeY * aspectRatio;
+
+        const worldX = ndcX * (worldSizeX * 0.5) + camX;
+        const worldY = ndcY * (worldSizeY * 0.5) + camY;
+
+        // Convert world coordinates to tile coordinates (floor)
+        const tileX = Math.floor(worldX);
+        const tileY = Math.floor(worldY);
+
+        // Clamp to map bounds (0 to 63 for 64x64 map)
+        const MAP_SIZE = 64;
+        const clampedX = Math.max(0, Math.min(MAP_SIZE - 1, tileX));
+        const clampedY = Math.max(0, Math.min(MAP_SIZE - 1, tileY));
+
+        // Write back to SAB (store as float, will be cast to int in shader)
+        sabView[SAB_OFFSETS.HOVERED_TILE_X] = clampedX;
+        sabView[SAB_OFFSETS.HOVERED_TILE_Y] = clampedY;
+    }
+
     let lastFrameTime = performance.now();
     let frameCount = 0;
     const frame = () => {
         const now = performance.now();
         const deltaTime = (now - lastFrameTime) / 1000; // Convert to seconds
         lastFrameTime = now;
+
+        // Calculate hovered tile coordinates from mouse position
+        calculateHoveredTile();
 
         // Update all visible layers
         viewManager.update(sabView, deltaTime);

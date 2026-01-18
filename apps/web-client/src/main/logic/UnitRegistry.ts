@@ -276,6 +276,42 @@ export class UnitRegistry {
     }
 
     /**
+     * Sync units to worker - creates a Float32Array with GPU rendering data
+     * 
+     * Format: [x, y, typeId, state] per unit (4 floats per unit)
+     * - x: Grid X position (f32)
+     * - y: Grid Y position (f32)
+     * - typeId: Unit type ID (f32, cast from UnitType enum)
+     * - state: State flags bitmask (f32, cast from UnitState enum)
+     * 
+     * This is the format expected by the GPU instancing system.
+     * The array can be transferred to the worker via postMessage using transferable objects.
+     * 
+     * @param onlyDirty - If true, only sync dirty units; if false, sync all units
+     * @returns Float32Array containing unit data (4 floats per unit)
+     */
+    syncUnits(onlyDirty: boolean = false): Float32Array {
+        const unitsToSync = onlyDirty
+            ? Array.from(this.dirtyUnits).map(id => this.units.get(id)).filter((u): u is Unit => u !== undefined)
+            : Array.from(this.units.values());
+
+        // Each unit takes 4 floats: [x, y, typeId, state]
+        const buffer = new Float32Array(unitsToSync.length * 4);
+
+        for (let i = 0; i < unitsToSync.length; i++) {
+            const unit = unitsToSync[i];
+            const offset = i * 4;
+
+            buffer[offset + 0] = unit.gridPos.x;             // x
+            buffer[offset + 1] = unit.gridPos.y;             // y
+            buffer[offset + 2] = unit.unitType;              // typeId
+            buffer[offset + 3] = unit.state;                 // state
+        }
+
+        return buffer;
+    }
+
+    /**
      * Get the number of units in the registry
      * @returns Number of units
      */
@@ -310,5 +346,27 @@ export class UnitRegistry {
      */
     getUnitsByOwner(ownerId: number): Unit[] {
         return Array.from(this.units.values()).filter(unit => unit.ownerId === ownerId);
+    }
+
+    /**
+     * Clear selection state from all units
+     */
+    clearSelection(): void {
+        for (const unit of this.units.values()) {
+            if (unit.state & UnitState.SELECTED) {
+                unit.state &= ~UnitState.SELECTED;
+                this.dirtyUnits.add(unit.id);
+            }
+        }
+    }
+
+    /**
+     * Get all selected units
+     * @returns Array of selected units
+     */
+    getSelectedUnits(): Unit[] {
+        return Array.from(this.units.values()).filter(
+            unit => (unit.state & UnitState.SELECTED) !== 0
+        );
     }
 }

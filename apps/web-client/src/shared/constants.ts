@@ -12,6 +12,8 @@ export const SAB_OFFSETS = {
     SCREEN_HEIGHT: 6,
     IS_MOUSE_DOWN: 7, // 0 for false, 1 for true
     CAPTURED_LAYER_ID: 8, // Layer index that captured input, or -1 if none
+    HOVERED_TILE_X: 9, // Tile X coordinate under mouse (as float, cast to int)
+    HOVERED_TILE_Y: 10, // Tile Y coordinate under mouse (as float, cast to int)
 };
 
 export const SAB_SIZE = 1024; // Bytes
