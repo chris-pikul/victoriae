@@ -92,21 +92,39 @@ export function setupInput(sab: SharedArrayBuffer) {
         return [clampedX, clampedY];
     }
 
-    // Track mouse position (screen coordinates)
+    // Track mouse position (convert CSS pixels to canvas internal pixels)
+    // Mouse coordinates (clientX, clientY) are in CSS pixels
+    // Canvas internal resolution is CSS pixels * devicePixelRatio
+    // We need to convert to canvas pixels for viewport checking
     window.addEventListener('mousemove', (e) => {
-        view[SAB_OFFSETS.MOUSE_WORLD_X] = e.clientX;
-        view[SAB_OFFSETS.MOUSE_WORLD_Y] = e.clientY;
+        const dpr = window.devicePixelRatio || 1;
+        // Convert CSS pixels to canvas internal pixels
+        view[SAB_OFFSETS.MOUSE_WORLD_X] = e.clientX * dpr;
+        view[SAB_OFFSETS.MOUSE_WORLD_Y] = e.clientY * dpr;
     });
+
+    // Helper function to check if input is captured by a layer (not the world map)
+    function isInputCaptured(): boolean {
+        const capturedLayerId = view[SAB_OFFSETS.CAPTURED_LAYER_ID];
+        return capturedLayerId >= 0; // -1 means no capture (world map)
+    }
 
     // Zoom at mouse position (zoom-to-cursor)
     window.addEventListener('wheel', (e) => {
         e.preventDefault();
+
+        // Check if input is captured by a layer (e.g., minimap)
+        // If so, don't process world map zoom
+        if (isInputCaptured()) {
+            return;
+        }
 
         const currentZoom = view[SAB_OFFSETS.CAMERA_ZOOM];
         const currentCamX = view[SAB_OFFSETS.CAMERA_X];
         const currentCamY = view[SAB_OFFSETS.CAMERA_Y];
         const screenWidth = view[SAB_OFFSETS.SCREEN_WIDTH];
         const screenHeight = view[SAB_OFFSETS.SCREEN_HEIGHT];
+        // Mouse coordinates are now in canvas internal pixels (converted in mousemove handler)
         const mouseScreenX = view[SAB_OFFSETS.MOUSE_WORLD_X];
         const mouseScreenY = view[SAB_OFFSETS.MOUSE_WORLD_Y];
 

@@ -11,6 +11,7 @@ export const SAB_OFFSETS = {
     SCREEN_WIDTH: 5,
     SCREEN_HEIGHT: 6,
     IS_MOUSE_DOWN: 7, // 0 for false, 1 for true
+    CAPTURED_LAYER_ID: 8, // Layer index that captured input, or -1 if none
 };
 
 export const SAB_SIZE = 1024; // Bytes
